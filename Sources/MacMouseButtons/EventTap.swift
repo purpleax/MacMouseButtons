@@ -4,12 +4,14 @@ import CoreGraphics
 import Foundation
 import MacMouseButtonsCore
 
-/// Intercepts side-button clicks system-wide and replaces them with swipes.
+/// Intercepts clicks of the configured buttons system-wide and carries out
+/// their actions instead.
 @MainActor
 final class EventTap {
     /// Read on every click, so changes apply immediately.
     var settings = ButtonSettings()
 
+    private var tiltDebouncer = TiltDebouncer()
     private var port: CFMachPort?
     private var source: CFRunLoopSource?
 
@@ -29,6 +31,7 @@ final class EventTap {
 
         let mask = CGEventMask(1) << CGEventType.otherMouseDown.rawValue
             | CGEventMask(1) << CGEventType.otherMouseUp.rawValue
+            | CGEventMask(1) << CGEventType.scrollWheel.rawValue
 
         guard let port = CGEvent.tapCreate(
             tap: .cghidEventTap,
@@ -75,13 +78,31 @@ final class EventTap {
 
         case .otherMouseDown, .otherMouseUp:
             let button = event.getIntegerValueField(.mouseEventButtonNumber)
-            switch ButtonMapper.action(button: button, isDown: type == .otherMouseDown, settings: settings) {
+            switch ButtonMapper.response(button: button, isDown: type == .otherMouseDown, settings: settings) {
             case .passThrough:
                 return true
             case .swallow:
                 return false
-            case .swipe(let direction):
-                SwipeGesture.post(direction)
+            case .perform(let action):
+                ActionPerformer.perform(action)
+                return false
+            }
+
+        case .scrollWheel:
+            guard let tilt = ButtonMapper.tilt(
+                horizontal: event.getIntegerValueField(.scrollWheelEventDeltaAxis2),
+                vertical: event.getIntegerValueField(.scrollWheelEventDeltaAxis1),
+                isContinuous: event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0,
+                shiftHeld: event.flags.contains(.maskShift)
+            ) else { return true }
+            let isNewTilt = tiltDebouncer.isNewTilt(tilt, at: ProcessInfo.processInfo.systemUptime)
+            switch ButtonMapper.response(tilt: tilt, isNewTilt: isNewTilt, settings: settings) {
+            case .passThrough:
+                return true
+            case .swallow:
+                return false
+            case .perform(let action):
+                ActionPerformer.perform(action)
                 return false
             }
 

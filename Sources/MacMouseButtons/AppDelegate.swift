@@ -7,14 +7,14 @@ import MacMouseButtonsCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private let preferences = Preferences()
+    private let store = SettingsStore()
+    private lazy var settingsModel = SettingsModel(store: store) { [weak self] in self?.refresh() }
+    private let settingsWindow = SettingsWindowController()
     private let tap = EventTap()
     private var statusItem: NSStatusItem!
     private var permissionTimer: Timer?
 
     private let enabledItem = NSMenuItem(title: "Enabled", action: #selector(toggleEnabled), keyEquivalent: "e")
-    private let mouseDownItem = NSMenuItem(title: "Trigger on Mouse Down", action: #selector(toggleMouseDown), keyEquivalent: "")
-    private let swapItem = NSMenuItem(title: "Swap Buttons", action: #selector(toggleSwap), keyEquivalent: "")
     private let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
     private let permissionInfoItem = NSMenuItem(title: "Needs Accessibility access to work", action: nil, keyEquivalent: "")
     private let permissionItem = NSMenuItem(title: "Open Accessibility Settings…", action: #selector(openAccessibilitySettings), keyEquivalent: "")
@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // app is how you get the icon back, so always show it.
         statusItem.isVisible = true
         statusItem.menu = makeMenu()
+        NSApp.mainMenu = makeMainMenu()
 
         // Shows the system prompt the first time; does nothing once answered.
         // The key is the value of `kAXTrustedCheckOptionPrompt`, which Swift 6
@@ -66,9 +67,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// current Accessibility permission.
     private func refresh() {
         let trusted = AXIsProcessTrusted()
-        tap.settings = preferences.buttonSettings
+        tap.settings = store.buttonSettings
 
-        if preferences.enabled && trusted {
+        if store.enabled && trusted {
             tap.start()
         } else {
             // Stop promptly when permission is revoked: a live tap that macOS
@@ -78,12 +79,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // `AXIsProcessTrusted` can keep saying yes after the app is removed
         // from the list, so also treat a refused tap as missing permission.
-        let needsPermission = !trusted || (preferences.enabled && !tap.isRunning)
+        let needsPermission = !trusted || (store.enabled && !tap.isRunning)
 
         enabledItem.state = tap.isRunning ? .on : .off
         enabledItem.isEnabled = !needsPermission
-        mouseDownItem.state = preferences.triggerOnMouseDown ? .on : .off
-        swapItem.state = preferences.swapButtons ? .on : .off
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         permissionInfoItem.isHidden = !needsPermission
         permissionItem.isHidden = !needsPermission
@@ -116,6 +115,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let aboutItem = NSMenuItem(title: [appName, version].compactMap { $0 }.joined(separator: " "), action: nil, keyEquivalent: "")
         aboutItem.isEnabled = false
 
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+
         let quitItem = NSMenuItem(title: "Quit \(appName)", action: #selector(quit), keyEquivalent: "q")
 
         let items: [NSMenuItem] = [
@@ -124,8 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             permissionSeparator,
             enabledItem,
             .separator(),
-            mouseDownItem,
-            swapItem,
+            settingsItem,
             .separator(),
             loginItem,
             hideItem,
@@ -140,6 +140,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return menu
     }
 
+    /// Never visible, because the app has no Dock icon, but it is what makes
+    /// ⌘W, ⌘Q and ⌘, work while the settings window is open.
+    private func makeMainMenu() -> NSMenu {
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
+        appMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        appMenu.addItem(withTitle: "Quit \(appName)", action: #selector(quit), keyEquivalent: "q").target = self
+        let appItem = NSMenuItem()
+        appItem.submenu = appMenu
+        let mainMenu = NSMenu()
+        mainMenu.addItem(appItem)
+        return mainMenu
+    }
+
     func menuWillOpen(_ menu: NSMenu) {
         refresh()
     }
@@ -147,18 +161,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: Actions
 
     @objc private func toggleEnabled() {
-        preferences.enabled.toggle()
+        store.enabled.toggle()
         refresh()
     }
 
-    @objc private func toggleMouseDown() {
-        preferences.triggerOnMouseDown.toggle()
-        refresh()
-    }
-
-    @objc private func toggleSwap() {
-        preferences.swapButtons.toggle()
-        refresh()
+    @objc private func showSettings() {
+        settingsWindow.show(model: settingsModel)
     }
 
     @objc private func toggleLaunchAtLogin() {

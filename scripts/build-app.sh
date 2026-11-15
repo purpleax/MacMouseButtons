@@ -5,6 +5,7 @@
 #   scripts/build-app.sh              build for this Mac's architecture
 #   UNIVERSAL=1 scripts/build-app.sh  build for Apple silicon and Intel
 #   CODESIGN_IDENTITY="..."           sign with a specific identity ("-" for ad hoc)
+#   TIMESTAMP=1                       add a secure timestamp (needed for notarising)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -46,6 +47,9 @@ if [[ -z "$IDENTITY" ]]; then
     echo "No Developer ID certificate found: signing ad hoc."
 fi
 
-codesign --force --options runtime --timestamp=none --sign "$IDENTITY" "$APP"
+TIMESTAMP_FLAG="--timestamp=none"
+if [[ "${TIMESTAMP:-0}" == "1" ]]; then TIMESTAMP_FLAG="--timestamp"; fi
+
+codesign --force --options runtime "$TIMESTAMP_FLAG" --sign "$IDENTITY" "$APP"
 codesign --verify --strict "$APP"
 echo "Built $APP ($(lipo -archs "$APP/Contents/MacOS/MacMouseButtons"))"
